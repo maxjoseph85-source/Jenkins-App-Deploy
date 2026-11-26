@@ -57,6 +57,20 @@ resource "aws_security_group" "jenkins" {
     cidr_blocks = [var.my_ip]
   }
 
+  # NEW: GitHub webhook delivery IPs (verify: curl -s https://api.github.com/meta | grep -A8 '"hooks"')
+  ingress {
+    description = "GitHub webhooks"
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = [
+      "192.30.252.0/22",
+      "185.199.108.0/22",
+      "140.82.112.0/20",
+      "143.55.64.0/20",
+    ]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -65,6 +79,17 @@ resource "aws_security_group" "jenkins" {
   }
 
   tags = { Name = "jenkins-sg" }
+}
+
+# NEW: Allow Jenkins to reach the EKS API server (private endpoint) on 443
+resource "aws_security_group_rule" "jenkins_to_eks_api" {
+  description              = "Jenkins to EKS API"
+  type                     = "ingress"
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  security_group_id        = module.eks.cluster_security_group_id
+  source_security_group_id = aws_security_group.jenkins.id
 }
 
 # --- IAM role: lets Jenkins push to ECR and talk to EKS without access keys ---
@@ -118,6 +143,17 @@ resource "aws_instance" "jenkins" {
   root_block_device {
     volume_size = 30
     volume_type = "gp3"
+  }
+
+  # NEW: lets the Jenkins container (one extra network hop) use the instance IAM role
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 2
+  }
+
+  lifecycle {
+    ignore_changes = [ami]   # NEW: stops a newer AMI release from replacing your Jenkins server
   }
 
   tags = { Name = "jenkins-server" }
